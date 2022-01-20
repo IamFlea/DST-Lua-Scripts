@@ -1,0 +1,54 @@
+name: build
+on: [ pull_request, push ]
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            -   uses: actions/checkout@v2
+                with:
+                    fetch-depth: 0 // technically not needed, could go with 2, but this is safer in case push failes
+
+            -   name: get changed files
+                id: changed-files
+                uses: tj-actions/changed-files@v13.1
+                with:
+                    files: |
+                        scripts
+                        version.txt
+
+            -   name: fill the directories with new and old files
+                run: |
+                    for file in ${{ steps.changed-files.outputs.all_changed_and_modified_files }}; do
+                        path="${file%/*}/"
+                        if [ "$path" = "${file}/" ]; then
+                            path=""
+                        fi
+
+                        mkdir -p diff/old/${path}
+                        mkdir -p diff/new/${path}
+                    
+                        # TODO: improve - not the best solution since it will ignore errors
+                        (cp "${file}" "diff/new/${path}") || true
+                        (git show ${{ github.event.before }}:"${file}" > "diff/old/${file}") || true
+                    done
+
+            -   name: upload to backend
+                run: |
+                    cd diff/
+                    tar -czf diff.tar *
+                    curl -H "secret:${{ secrets.WEBHOOK_SECRET }}" \
+                        -H "commit:${{ github.event.after }}" \
+                        -F filename=diff.tar \
+                        -F diff=@diff.tar \
+                        ${{ secrets.WEBHOOK_URL }}
+
+            -   uses: actions/upload-artifact@v2
+                with:
+                    name: diff.tar
+                    path: diff/diff.tar
+
+            -   name: cleanup
+                run: |
+                    cd ..
+                    rm -rf diff/
